@@ -1,0 +1,82 @@
+version: "3"
+services:
+  zookeeper:
+    container_name: "zookeeper"
+    image: "zookeeper"
+    restart: always
+    ports:
+      - 2181:2181
+      - 2888:2888
+      - 3888:3888
+    volumes:
+      - "./zookeeper/volumes/data:/data"
+      - "./zookeeper/volumes/datalog:/datalog"
+    hostname: "zookeeper"
+    environment:
+      ZOO_MY_ID: 1
+      ZOO_SERVERS: "server.1=zookeeper:2888:3888"
+  clickhouse-master:
+    container_name: "clickhouse-master"
+    build:
+      context: .
+      dockerfile: "./common/Dockerfile"
+    depends_on:
+      - zookeeper
+    restart: always
+    ports:
+      - 8123:8123
+      - 9000:9000
+    volumes:
+      - "./common/config.xml:/etc/clickhouse-server/config.xml"
+      - "./clickhouse-master/conf.d:/etc/clickhouse-server/conf.d"
+      - "./clickhouse-master/volumes:/var/lib/clickhouse"
+    hostname: "clickhouse-master"
+  clickhouse-master-shard:
+    container_name: "clickhouse-master-shard"
+    build:
+      context: .
+      dockerfile: "./common/Dockerfile"
+    depends_on:
+      - zookeeper
+    restart: always
+    ports:
+      - 8124:8123
+      - 9001:9000
+    volumes:
+      - "./common/config.xml:/etc/clickhouse-server/config.xml"
+      - "./clickhouse-master-shard/conf.d:/etc/clickhouse-server/conf.d"
+      - "./clickhouse-master-shard/volumes:/var/lib/clickhouse"
+    hostname: "clickhouse-master-shard"
+  clickhouse-replica:
+    container_name: "clickhouse-replica"
+    build:
+      context: .
+      dockerfile: "./common/Dockerfile"
+    depends_on:
+      - zookeeper
+    restart: always
+    ports:
+      - 8125:8123
+      - 9002:9000
+    volumes:
+      - "./common/config.xml:/etc/clickhouse-server/config.xml"
+      - "./clickhouse-replica/conf.d:/etc/clickhouse-server/conf.d"
+      - "./clickhouse-replica/volumes:/var/lib/clickhouse"
+    hostname: "clickhouse-replica"
+  clickhouse-replica-shard:
+    container_name: "clickhouse-replica-shard"
+    build:
+      context: .
+      dockerfile: "./common/Dockerfile"
+    depends_on:
+      - zookeeper
+    restart: always
+    ports:
+      - 8126:8123
+      - 9003:9000
+    volumes:
+      - "./common/config.xml:/etc/clickhouse-server/config.xml"
+      - "./clickhouse-replica-shard/conf.d:/etc/clickhouse-server/conf.d"
+      - "./clickhouse-replica-shard/volumes:/var/lib/clickhouse"
+    hostname: "clickhouse-replica-shard"
+
