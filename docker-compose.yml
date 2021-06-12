@@ -8,13 +8,13 @@ services:
       - 2181:2181
       - 2888:2888
       - 3888:3888
-    volumes:
-      - "./zookeeper/volumes/data:/data"
-      - "./zookeeper/volumes/datalog:/datalog"
+    #volumes:
+    #  - "./zookeeper/volumes/data:/data"
+    #  - "./zookeeper/volumes/datalog:/datalog"
     hostname: "zookeeper"
     environment:
       ZOO_MY_ID: 1
-      ZOO_SERVERS: "server.1=zookeeper:2888:3888"
+      ZOO_STANDALONE_ENABLED: "true"
   clickhouse-s0-r0:
     container_name: "clickhouse-s0-r0"
     image: yandex/clickhouse-server

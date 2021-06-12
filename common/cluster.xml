@@ -2,7 +2,7 @@
 	<remote_servers>
 		<cluster_01>
 			<shard>
-				<!-- Optional. Shard weight when writing data. Defalut: 1. -->
+				<!-- Optional. Shard weight when writing data. Default: 1. -->
 				<weight>1</weight>
 				<internal_replication>true</internal_replication>
 				<replica>

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+SCRIPT_DIR=`dirname $0`
+cd $SCRIPT_DIR
+
+RANDOM_SERVER=`ls ../ | grep clickhouse | shuf -n 1`
+
+docker exec -it $RANDOM_SERVER clickhouse-client $@
