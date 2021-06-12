@@ -1,9 +1,9 @@
 # Distributed clickhouse
 
 Sets up standalone zookeeper to coordinate a clickhouse cluster consisting of
-  	- two shards
-	- two replicas per shard
-	- postgres with [clickhouse foreign data wrapper](https://github.com/adjust/clickhouse_fdw) to access clickhouse
+  - two shards
+  - two replicas per shard
+  - postgres with [clickhouse foreign data wrapper](https://github.com/adjust/clickhouse_fdw) 
 
 ## How To Use
 
