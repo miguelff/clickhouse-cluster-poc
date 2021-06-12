@@ -15,68 +15,64 @@ services:
     environment:
       ZOO_MY_ID: 1
       ZOO_SERVERS: "server.1=zookeeper:2888:3888"
-  clickhouse-master:
-    container_name: "clickhouse-master"
-    build:
-      context: .
-      dockerfile: "./common/Dockerfile"
+  clickhouse-s0-r0:
+    container_name: "clickhouse-s0-r0"
+    image: yandex/clickhouse-server
     depends_on:
       - zookeeper
     restart: always
     ports:
       - 8123:8123
-      - 9000:9000
+      - 9100:9000
     volumes:
       - "./common/config.xml:/etc/clickhouse-server/config.xml"
-      - "./clickhouse-master/conf.d:/etc/clickhouse-server/conf.d"
-      - "./clickhouse-master/volumes:/var/lib/clickhouse"
-    hostname: "clickhouse-master"
-  clickhouse-master-shard:
-    container_name: "clickhouse-master-shard"
-    build:
-      context: .
-      dockerfile: "./common/Dockerfile"
+      - "./common/cluster.xml:/etc/clickhouse-server/conf.d/cluster.xml"
+      - "./common/zookeeper.xml:/etc/clickhouse-server/conf.d/zookeeper.xml"
+      - "./clickhouse-s0-r0/macro.xml:/etc/clickhouse-server/conf.d/macro.xml"
+    hostname: "clickhouse-s0-r0"
+  clickhouse-s1-r0:
+    container_name: "clickhouse-s1-r0"
+    image: yandex/clickhouse-server
     depends_on:
       - zookeeper
     restart: always
     ports:
       - 8124:8123
-      - 9001:9000
+      - 9101:9000
     volumes:
       - "./common/config.xml:/etc/clickhouse-server/config.xml"
-      - "./clickhouse-master-shard/conf.d:/etc/clickhouse-server/conf.d"
-      - "./clickhouse-master-shard/volumes:/var/lib/clickhouse"
-    hostname: "clickhouse-master-shard"
-  clickhouse-replica:
-    container_name: "clickhouse-replica"
-    build:
-      context: .
-      dockerfile: "./common/Dockerfile"
+      - "./common/cluster.xml:/etc/clickhouse-server/conf.d/cluster.xml"
+      - "./common/zookeeper.xml:/etc/clickhouse-server/conf.d/zookeeper.xml"
+      - "./clickhouse-s1-r0/macro.xml:/etc/clickhouse-server/conf.d/macro.xml"
+    hostname: "clickhouse-s1-r0"
+  clickhouse-s0-r1:
+    container_name: "clickhouse-s0-r1"
+    image: yandex/clickhouse-server
     depends_on:
       - zookeeper
     restart: always
     ports:
       - 8125:8123
-      - 9002:9000
+      - 9102:9000
     volumes:
       - "./common/config.xml:/etc/clickhouse-server/config.xml"
-      - "./clickhouse-replica/conf.d:/etc/clickhouse-server/conf.d"
-      - "./clickhouse-replica/volumes:/var/lib/clickhouse"
-    hostname: "clickhouse-replica"
-  clickhouse-replica-shard:
-    container_name: "clickhouse-replica-shard"
-    build:
-      context: .
-      dockerfile: "./common/Dockerfile"
+      - "./common/cluster.xml:/etc/clickhouse-server/conf.d/cluster.xml"
+      - "./common/zookeeper.xml:/etc/clickhouse-server/conf.d/zookeeper.xml"
+      - "./clickhouse-s0-r1/macro.xml:/etc/clickhouse-server/conf.d/macro.xml"
+    hostname: "clickhouse-s0-r1"
+  clickhouse-s1-r1:
+    container_name: "clickhouse-s1-r1"
+    image: yandex/clickhouse-server
     depends_on:
       - zookeeper
     restart: always
     ports:
       - 8126:8123
-      - 9003:9000
+      - 9103:9000
     volumes:
       - "./common/config.xml:/etc/clickhouse-server/config.xml"
-      - "./clickhouse-replica-shard/conf.d:/etc/clickhouse-server/conf.d"
-      - "./clickhouse-replica-shard/volumes:/var/lib/clickhouse"
-    hostname: "clickhouse-replica-shard"
+      - "./common/cluster.xml:/etc/clickhouse-server/conf.d/cluster.xml"
+      - "./common/zookeeper.xml:/etc/clickhouse-server/conf.d/zookeeper.xml"
+      - "./clickhouse-s1-r1/macro.xml:/etc/clickhouse-server/conf.d/macro.xml"
+    hostname: "clickhouse-s1-r1"
 

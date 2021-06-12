@@ -3,5 +3,5 @@
 SCRIPT_DIR=`dirname $0`
 cd $SCRIPT_DIR
 
-rm -rf ../clickhouse-master/volumes/* ../clickhouse-master-shard/volumes/* ../clickhouse-replica/volumes/* ../clickhouse-replica-shard/volumes/* ../zookeeper/volumes/data/* ../zookeeper/volumes/datalog/*
+rm -rf ../clickhouse-s0-r0/volumes/* ../clickhouse-s1-r0/volumes/* ../clickhouse-s0-r1/volumes/* ../clickhouse-s1-r1/volumes/* ../zookeeper/volumes/data/* ../zookeeper/volumes/datalog/*
 

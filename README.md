@@ -13,7 +13,7 @@ If you don't want to create test tables and insert test data, you can use follow
 ```bash
 $ docker-compose up -d
 ```
-When you execute this command, you can use no record clickhouse-server.  
+When you execute this command, you can use no record clickhouse-server.
 
 When you use clickhouse-client, you can execute following command.
 ```bash
@@ -22,10 +22,10 @@ or
 $ docker exec -it {servername} clickhouse-client [option]
 ```
 Original servernames are
-* clickhouse-master
-* clickhouse-master-shard
-* clickhouse-replica
-* clickhouse-replica-shard
+* clickhouse-s0-r0
+* clickhouse-s1-r0
+* clickhouse-s0-r1
+* clickhouse-s1-r1
 If you want to add server, you create directory with new servername and write docker-compose.yml.
 
 ## Customization
@@ -47,7 +47,7 @@ If you add zookeeper containers, you edit `docker-compose.yml` and `{servername}
     hostname: "zookeeper-2"
     environment:
       ZOO_MY_ID: 2
-      ZOO_SERVERS: "server.1=zookeeper-1:2888:3888 server.2=zookeeper-2:2888:3888" 
+      ZOO_SERVERS: "server.1=zookeeper-1:2888:3888 server.2=zookeeper-2:2888:3888"
 ...
     depends_on:
       - "zookeeper-1"
@@ -113,7 +113,7 @@ And edit each files.
         <weight>1</weight> <!-- setting weight if you shard this server -->
         <internal_replication>true</internal_replication>
         <replica>
-          <host>clickhouse-master</host> <!-- edit your clickhouse server -->
+          <host>clickhouse-s0-r0</host> <!-- edit your clickhouse server -->
           <port>9000</port>
           <user>default</user>
           <password></password>
@@ -123,7 +123,7 @@ And edit each files.
         <weight>1</weight> <!-- if you use shard, set this parameter. -->
         <internal_replication>true</internal_replication>
         <replica>
-          <host>clickhouse-master-shard</host> <!-- your sharding server -->
+          <host>clickhouse-s1-r0</host> <!-- your sharding server -->
           <port>9000</port>
           <user>default</user>
           <password></password>

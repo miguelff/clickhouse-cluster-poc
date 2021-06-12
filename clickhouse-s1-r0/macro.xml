@@ -1,7 +1,7 @@
 <yandex>
   <macros>
     <shard>1</shard>
-    <replica>clickhouse-master</replica>
+    <replica>clickhouse-s1-r0</replica>
   </macros>
 </yandex>
 
