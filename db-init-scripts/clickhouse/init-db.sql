@@ -11,3 +11,5 @@ PARTITION BY toYYYYMM(EventDate);
 CREATE TABLE IF NOT EXISTS analytics.events ON CLUSTER 'cluster_01'
 AS analytics.events_local
 ENGINE = Distributed('cluster_01', 'analytics', 'events_local', rand());
+
+INSERT INTO analytics.events(EventDate, CounterID, UserID) VALUES (now(), 1,2),(now(), 2, 2),(now(), 3, 1),(now(), 3, 1);

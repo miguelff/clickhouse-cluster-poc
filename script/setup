@@ -8,11 +8,3 @@ RANDOM_SERVER=`ls ../ | grep clickhouse | shuf -n 1`
 
 # run docker container
 docker-compose up -d
-
-echo "Creating schema on $RANDOM_SERVER..."
-# create schema
-docker exec -i $RANDOM_SERVER clickhouse-client --multiquery < ../sql/create.sql
-
-echo "Loading data on $RANDOM_SERVER..."
-# upload data
-docker exec -i $RANDOM_SERVER clickhouse-client --multiquery < ../sql/insert.sql

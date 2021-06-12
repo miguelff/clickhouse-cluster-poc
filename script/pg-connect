@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+docker exec -it postgres-fdw psql -U postgres

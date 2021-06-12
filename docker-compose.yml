@@ -1,4 +1,4 @@
-version: "3"
+version: "3.9"
 services:
   zookeeper:
     container_name: "zookeeper"
@@ -8,9 +8,6 @@ services:
       - 2181:2181
       - 2888:2888
       - 3888:3888
-    #volumes:
-    #  - "./zookeeper/volumes/data:/data"
-    #  - "./zookeeper/volumes/datalog:/datalog"
     hostname: "zookeeper"
     environment:
       ZOO_MY_ID: 1
@@ -20,6 +17,9 @@ services:
     image: yandex/clickhouse-server
     depends_on:
       - zookeeper
+      - clickhouse-s0-r1
+      - clickhouse-s1-r0
+      - clickhouse-s1-r1
     restart: always
     ports:
       - 8123:8123
@@ -74,5 +74,24 @@ services:
       - "./common/cluster.xml:/etc/clickhouse-server/conf.d/cluster.xml"
       - "./common/zookeeper.xml:/etc/clickhouse-server/conf.d/zookeeper.xml"
       - "./clickhouse-s1-r1/macro.xml:/etc/clickhouse-server/conf.d/macro.xml"
+      - "./db-init-scripts/clickhouse:/docker-entrypoint-initdb.d"
     hostname: "clickhouse-s1-r1"
+  postgres-fdw:
+    depends_on:
+      - clickhouse-s0-r0
+    container_name: "postgres-fdw"
+    build:
+      context: .
+      args:
+        FDW_VERSION: "1.3.0"
+        PG_VERSION: 12
+      dockerfile: postgres_fdw.Dockerfile
+    ports:
+      - 15432:5432
+    volumes:
+      - "./db-init-scripts/postgres:/docker-entrypoint-initdb.d"
+    hostname: "postgres-fdw"
+    environment:
+      POSTGRES_PASSWORD: "passwd"
+      POSTGRES_METHOD_AUTH: "trust"
 
