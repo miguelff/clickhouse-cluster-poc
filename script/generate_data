@@ -1,0 +1,179 @@
+#!/usr/bin/env ruby
+require 'csv'
+require 'securerandom'
+
+class Generator
+  attr_reader :projects, :start
+
+  def initialize(args={})
+    @start = args[:start] || Time.now
+    num_projects = args[:num_projects] || 1
+
+    @projects = [].tap do |p|
+      num_projects.times do
+        p << random_uuid
+      end
+    end
+  end
+
+  def generate(count=100, args={})
+    [].tap do |rows|
+      count.times do |r|
+        rows << generate_row(args.merge(row: r))
+      end
+    end
+  end
+
+  def timestamp(start, offset)
+    (start + offset).strftime("%Y-%m-%d %H:%M:%S")
+  end
+
+  def nullable(prob=0.1)
+    return yield if rand > prob
+  end
+
+  def random_string(length=8)
+    (0...length).map { (65 + rand(26)).chr }.join
+  end
+
+  def random_uuid
+    SecureRandom.uuid
+  end
+
+  def self.nil_methods(*args)
+    args.each do |a|
+      define_method(a) {}
+    end
+  end
+end
+
+class OperationLogsGenerator < Generator
+  def generate_row(args)
+    offset = (args[:row] || 0) / (args[:offset_quotient] || 10)
+    start = args[:start] || Time.now
+    [
+        projects.sample,
+        timestamp(start, offset),
+        request_id,
+        server_client_id,
+        instance_uid,
+        client_name,
+        operation_type,
+        operation_name,
+        operation_id,
+        transport,
+        role,
+        query,
+        parameterized_query_hash,
+        session_vars,
+        request_size,
+        response_size,
+        latency,
+        request_read_time,
+        error,
+        error_code,
+        http_info,
+        websocket_id,
+        ws_operation_id,
+        opkind,
+        generated_sql,
+    ]
+  end
+
+  nil_methods(:error_code, :http_info, :websocket_id, :ws_operation_id, :opkind, :generated_sql)
+
+  def latency
+    rand(1000...1_000_000)
+  end
+  alias_method :request_read_time, :latency
+
+  def request_size
+    nullable(0.1) { rand(1..1000) }
+  end
+
+  def response_size
+    nullable(0.1) { rand(1..1000) }
+  end
+
+  def session_vars
+    '{}'
+  end
+
+  def error
+    nullable(0.9) { random_string }
+  end
+
+  def client_name
+    nullable { random_string }
+  end
+
+  def request_id
+    random_string(10)
+  end
+
+  def server_client_id
+    nullable { random_string }
+  end
+
+  def operation_type
+    %w(query mutation).sample
+  end
+
+  def operation_name
+    nullable(0.2) { random_string(4)}
+  end
+
+  def operation_id
+    random_string
+  end
+
+  def transport
+    %w(http ws).sample
+  end
+
+  def role
+    %w(user admin worker).sample
+  end
+
+  def query
+    nullable(0.1) { random_string(50)}
+  end
+
+  def parameterized_query_hash
+    random_string(40)
+  end
+
+  def instance_uid
+    random_uuid
+  end
+end
+
+if $0 == __FILE__
+  require 'open3'
+  args = Hash[ARGV.join(' ').scan(/--?([^=\s]+)(?:=(\S+))?/) ]
+  args["table"] ||= "operation_logs"
+  args["projects"] ||= 10
+  args["rows"] ||= 100
+  args["container"] ||= "clickhouse-s1-r1"
+
+  puts "DEBUG: Generating csv: #{args.inspect}"
+
+  generator = case args["table"]
+              when "operation_logs"
+                OperationLogsGenerator
+              end
+
+  csv = generator.new(num_projects: args["projects"].to_i).generate(args["rows"].to_i).map(&:to_csv).join()
+
+  cmd = "docker exec -i #{args["container"]} clickhouse-client --query=\"INSERT INTO analytics.#{args["table"]} FORMAT CSV\""
+  puts "DEBUG: Running Command: #{cmd}"
+  
+  Open3.popen3(cmd) do |i,o,e,t|
+    i.write csv
+    i.close
+    puts o.read
+    STDERR.puts e.read
+  end
+end
+
+
