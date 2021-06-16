@@ -29,6 +29,7 @@ services:
       - "./common/cluster.xml:/etc/clickhouse-server/conf.d/cluster.xml"
       - "./common/zookeeper.xml:/etc/clickhouse-server/conf.d/zookeeper.xml"
       - "./clickhouse-s0-r0/macro.xml:/etc/clickhouse-server/conf.d/macro.xml"
+      - "./db-init-scripts/clickhouse:/docker-entrypoint-initdb.d"
     hostname: "clickhouse-s0-r0"
   clickhouse-s1-r0:
     container_name: "clickhouse-s1-r0"
@@ -74,7 +75,6 @@ services:
       - "./common/cluster.xml:/etc/clickhouse-server/conf.d/cluster.xml"
       - "./common/zookeeper.xml:/etc/clickhouse-server/conf.d/zookeeper.xml"
       - "./clickhouse-s1-r1/macro.xml:/etc/clickhouse-server/conf.d/macro.xml"
-      - "./db-init-scripts/clickhouse:/docker-entrypoint-initdb.d"
     hostname: "clickhouse-s1-r1"
   postgres-fdw:
     depends_on:
