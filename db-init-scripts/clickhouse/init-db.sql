@@ -1,4 +1,9 @@
-create database if not exists analytics on cluster 'cluster_01';
+-- analytics contains table and view definitions that can be imported by postgres FDW and are accessed by the clients
+CREATE DATABASE analytics on cluster 'cluster_01';
+-- analytics_internal contains table and view definitions that are not accessed by clients or cannot be imported in postgres
+-- through the FDW, an example is operation_logs_minutely_agg that has incompatible data types
+-- like AggregateFunction(quantiles(0.5, 0.9, 0.95, 0.99), UInt64),
+CREATE DATABASE analytics_internal on cluster 'cluster_01';
 
 -- New required logical layout: https://docs.google.com/document/d/1Bey4IluXJKCuq5zl70tVgpSnbuRsV44LuYPxGODGtTA/edit#
 --
@@ -45,9 +50,10 @@ create database if not exists analytics on cluster 'cluster_01';
 --  * Fields renamed:
 --      * time -> timestamp
 --      * user_role -> role
---      * parameterized_query_hash -> query_hash, changed from string to fixed string of 40 bytes, as it's a sha1
+--      * parameterized_query_hash: changed from string to fixed string of 40 bytes, as it's a sha1
 --      * user_vars -> session_vars
---      * execution_time -> latency
+--      * execution_time -> latency: also changed type be an Int32 (number of milli or microseconds and not a decimal)
+--      * request_read_time: changed to be an Int32 (number of milli or microseconds and not a decimal)
 -- * Fields removed:
 --      * db_uid (deprecated)
 --      * is_error (derived from error != NULL)
@@ -59,7 +65,7 @@ create database if not exists analytics on cluster 'cluster_01';
 --    present in the existing physical model or not.
 --     * LEGACY: It is present in the existing physical model, although not required by the new model spec, it's there
 --    for backwards compatibility.
-CREATE TABLE IF NOT EXISTS analytics.operation_logs_local ON CLUSTER 'cluster_01' (
+CREATE TABLE analytics_internal.operation_logs_local ON CLUSTER 'cluster_01' (
     project_id UUID, -- LOGICAL
     timestamp DateTime, -- LOGICAL: formerly time
     request_id String, -- LOGICAL
@@ -72,12 +78,12 @@ CREATE TABLE IF NOT EXISTS analytics.operation_logs_local ON CLUSTER 'cluster_01
     transport String, -- LEGACY (it might be replaced with materialized column, based on: websocket_id != NULL THEN ws ELSE http)
     role String, -- LOGICAL: formerly user_role
     query Nullable(String), -- LOGICAL
-    query_hash FixedString(40), -- LOGICAL: formerly parameterized_query_hash Nullable(String), it's sha1 so 40 bytes.
+    parameterized_query_hash FixedString(40), -- LEGACY
     session_vars String DEFAULT '{}', --LOGICAL: formerly user_vars, it's json.
-    request_size Nullable(Int32), -- LOGICAL
-    response_size Nullable(Int32), -- LOGICAL
-    latency Decimal64(12) DEFAULT 0, -- LOGICAL: formerly execution_time
-    request_read_time Decimal64(12) DEFAULT 0, -- LEGACY
+    request_size Nullable(UInt32), -- LOGICAL
+    response_size Nullable(UInt32), -- LOGICAL
+    latency UInt32 DEFAULT 0, -- LOGICAL: formerly execution_time
+    request_read_time UInt32 DEFAULT 0, -- LEGACY
     error Nullable(String), -- LOGICAL: is_error was removed as (is_error equals to (error != NULL))
     error_code Nullable(String), -- LEGACY
     http_info Nullable(String), -- LEGACY
@@ -85,11 +91,57 @@ CREATE TABLE IF NOT EXISTS analytics.operation_logs_local ON CLUSTER 'cluster_01
     ws_operation_id Nullable(String), -- LEGACY
     kind Nullable(String), -- LEGACY
     generated_sql Nullable(String) -- LEGACY
-) ENGINE = ReplicatedMergeTree('/clickhouse/cluster_01/tables/analytics/operation_logs/{shard}', '{replica}')
+) ENGINE = ReplicatedMergeTree('/clickhouse/cluster_01/tables/analytics_internal/operation_logs_local/{shard}', '{replica}')
   ORDER BY (project_id, timestamp)
   PARTITION BY toStartOfTenMinutes(timestamp)
   TTL timestamp + INTERVAL 1 MONTH DELETE;
 
-CREATE TABLE IF NOT EXISTS analytics.operation_logs ON CLUSTER 'cluster_01'
-    AS analytics.operation_logs_local
-ENGINE = Distributed('cluster_01', 'analytics', 'operation_logs_local', rand());
+CREATE TABLE analytics.operation_logs ON CLUSTER 'cluster_01'
+    AS analytics_internal.operation_logs_local
+ENGINE = Distributed('cluster_01', 'analytics_internal', 'operation_logs_local', rand());
+
+-- This table will provide the storage for the minutely aggregations materialized view.
+-- We will have a non-materialized view on top of this to ease queries.
+CREATE TABLE analytics_internal.operation_logs_minutely_agg ON CLUSTER 'cluster_01' (
+   project_id UUID,
+   time_bucket DateTime,
+   role String,
+   operation_type Nullable(String), -- this cannot be null here and the materialized view triggers need to take into account that
+   operation_name Nullable(String), -- this cannot be null here and the materialized view triggers need to take into account that
+   parameterized_query_hash FixedString(40),
+   request_size_avg AggregateFunction(avg, Nullable(UInt32)),
+   response_size_avg AggregateFunction(avg, Nullable(UInt32)),
+   response_size_max AggregateFunction(max, Nullable(UInt32)),
+   response_size_quantiles AggregateFunction(quantiles(0.5, 0.9, 0.95, 0.99), UInt32),
+   latency_avg AggregateFunction(avg, UInt32),
+   latency_max AggregateFunction(max, UInt32),
+   latency_quantiles AggregateFunction(quantilesTiming(0.5, 0.9, 0.95, 0.99), UInt32),
+   err_count UInt32,
+   count UInt32,
+   INDEX operation_type_idx operation_type TYPE bloom_filter() GRANULARITY  1
+) ENGINE = ReplicatedAggregatingMergeTree('/clickhouse/cluster_01/tables/analytics_internal/operation_logs_minutely_agg_local/{shard}', '{replica}')
+PARTITION BY tuple() -- TODO: not partitioned and not distributed yet. Sizes must be low.
+ORDER BY (project_id, time_bucket, parameterized_query_hash)
+SETTINGS allow_nullable_key = 1;
+
+CREATE MATERIALIZED VIEW analytics_internal.operations_longs_minutely_mv ON CLUSTER 'cluster_01'
+TO analytics_internal.operation_logs_minutely_agg
+AS SELECT
+    project_id,
+    toStartOfMinute(timestamp) as time_bucket,
+    role,
+    parameterized_query_hash,
+    operation_type,
+    operation_name,
+    avgState(request_size) as request_size_avg,
+    avgState(response_size) as response_size_avg,
+    maxState(response_size) as response_size_max,
+    avgState(latency) as latency_avg,
+    maxState(latency) as latency_max,
+    quantilesTimingState(0.5, 0.9, 0.95, 0.99)(latency) as latency_quantiles,
+    countIf(isNotNull(error)) as err_count,
+    count(*) as count
+FROM analytics.operation_logs
+GROUP BY (project_id, time_bucket, role, parameterized_query_hash, operation_type, operation_name);
+
+
