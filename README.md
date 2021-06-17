@@ -3,7 +3,7 @@
 Sets up standalone zookeeper to coordinate a clickhouse cluster consisting of
   - two shards
   - two replicas per shard
-  - postgres with [clickhouse foreign data wrapper](https://github.com/adjust/clickhouse_fdw) 
+  - postgres with [clickhouse foreign data wrapper](https://github.com/adjust/clickhouse_fdw)
 
 ## How To Use
 
@@ -28,6 +28,22 @@ $ bash script/ch-connect {servername} [option]
 ```
 
 where servername is any of the `clickhouse-s{\d}-r{\d}` listed above.
+
+To fill clickhouse with data run:
+
+`script/generate-data`
+
+```
+Options:
+	--table: table to populatem defaults to `operation_logs`
+	--rows: number of rows to fill in, defaults to 200000
+	--projects: number of different projects filling data, defaults to 10
+	--queries: number of different queries issued, defaults to 100
+	--rps: number of requests with the same timestamp, defaults to 1000
+```
+
+By default 20,000 rows will be inserted by 10 different projects, using a random sample of 100 queries, spanning 20 seconds.
+
 
 ## Container bootstrap process
 

@@ -3,12 +3,12 @@ require 'csv'
 require 'securerandom'
 
 class Generator
-  attr_reader :projects, :start
+  attr_reader :projects, :queries, :start
 
   def initialize(args={})
     @start = args[:start] || Time.now
-    num_projects = args[:num_projects] || 1
 
+    num_projects = args[:num_projects] || 1
     @projects = [].tap do |p|
       num_projects.times do
         p << random_uuid
@@ -19,7 +19,7 @@ class Generator
   def generate(count=100, args={})
     [].tap do |rows|
       count.times do |r|
-        rows << generate_row(args.merge(row: r))
+        rows << generate_row(args.merge("row" => r))
       end
     end
   end
@@ -48,9 +48,23 @@ class Generator
 end
 
 class OperationLogsGenerator < Generator
+
+  attr_reader :queries
+
+  def initialize(args={})
+    super
+    num_queries = args[:num_queries] || 1
+    @queries = [].tap do |p|
+      num_queries.times do
+          p << {hash: random_string, operation_type: nullable{ random_string }, operation_name: %w(query mutation).sample, operation_id: nullable{ random_string }, query: nullable(0.1) { random_string(50)} }
+      end
+    end
+  end
+
   def generate_row(args)
-    offset = (args[:row] || 0) / (args[:offset_quotient] || 10)
-    start = args[:start] || Time.now
+    offset = (args["row"] || 0) / (args["rps"]&.to_i || 10)
+    start = Time.now
+    query = queries.sample
     [
         projects.sample,
         timestamp(start, offset),
@@ -58,13 +72,13 @@ class OperationLogsGenerator < Generator
         server_client_id,
         instance_uid,
         client_name,
-        operation_type,
-        operation_name,
-        operation_id,
+        query[:operation_type],
+        query[:operation_name],
+        query[:operation_id],
         transport,
         role,
-        query,
-        parameterized_query_hash,
+        query[:query],
+        query[:hash],
         session_vars,
         request_size,
         response_size,
@@ -115,28 +129,12 @@ class OperationLogsGenerator < Generator
     nullable { random_string }
   end
 
-  def operation_type
-    %w(query mutation).sample
-  end
-
-  def operation_name
-    nullable(0.2) { random_string(4)}
-  end
-
-  def operation_id
-    random_string
-  end
-
   def transport
     %w(http ws).sample
   end
 
   def role
     %w(user admin worker).sample
-  end
-
-  def query
-    nullable(0.1) { random_string(50)}
   end
 
   def parameterized_query_hash
@@ -153,8 +151,11 @@ if $0 == __FILE__
   args = Hash[ARGV.join(' ').scan(/--?([^=\s]+)(?:=(\S+))?/) ]
   args["table"] ||= "operation_logs"
   args["projects"] ||= 10
-  args["rows"] ||= 100
+  args["queries"] ||= 100
+  args["rows"] ||= 200000
   args["container"] ||= "clickhouse-s1-r1"
+  args["csv-only"] ||= false
+  args["rps"] ||= 1000
 
   puts "DEBUG: Generating csv: #{args.inspect}"
 
@@ -163,11 +164,16 @@ if $0 == __FILE__
                 OperationLogsGenerator
               end
 
-  csv = generator.new(num_projects: args["projects"].to_i).generate(args["rows"].to_i).map(&:to_csv).join()
+  csv = generator.new(num_projects: args.delete("projects").to_i, num_queries: args.delete("queries").to_i).generate(args.delete("rows").to_i, args).map(&:to_csv).join()
+
+  if args["csv-only"]
+  	puts "DEBUG: \n"+ csv
+  	exit
+  end
 
   cmd = "docker exec -i #{args["container"]} clickhouse-client --query=\"INSERT INTO analytics.#{args["table"]} FORMAT CSV\""
   puts "DEBUG: Running Command: #{cmd}"
-  
+
   Open3.popen3(cmd) do |i,o,e,t|
     i.write csv
     i.close
