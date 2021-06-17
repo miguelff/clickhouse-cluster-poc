@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS analytics_internal.operation_logs_local ON CLUSTER 'c
     generated_sql Nullable(String) -- LEGACY
 ) ENGINE = ReplicatedMergeTree('/clickhouse/cluster_01/tables/analytics_internal/operation_logs_local/{shard}', '{replica}')
   ORDER BY (project_id, timestamp)
-  PARTITION BY toStartOfTenMinutes(timestamp)
+  PARTITION BY xxHash32(project_id) % 5000 -- Users will be assigned to partitions. So only a shard will contain information about a project.
   TTL timestamp + INTERVAL 1 MONTH DELETE;
 
 CREATE TABLE IF NOT EXISTS analytics.operation_logs ON CLUSTER 'cluster_01'
@@ -102,7 +102,7 @@ ENGINE = Distributed('cluster_01', 'analytics_internal', 'operation_logs_local',
 
 -- This table will provide the storage for the minutely aggregations materialized view.
 -- We will have a non-materialized view on top of this to ease queries.
-CREATE TABLE IF NOT EXISTS analytics_internal.operation_logs_minutely_agg ON CLUSTER 'cluster_01' (
+CREATE TABLE IF NOT EXISTS analytics_internal.operation_logs_minutely_agg_local ON CLUSTER 'cluster_01' (
    project_id UUID,
    time_bucket DateTime,
    role String,
@@ -120,31 +120,61 @@ CREATE TABLE IF NOT EXISTS analytics_internal.operation_logs_minutely_agg ON CLU
    count SimpleAggregateFunction(sum, UInt64)
    -- INDEX operation_type_idx operation_type TYPE bloom_filter() GRANULARITY  1
 ) ENGINE = ReplicatedAggregatingMergeTree('/clickhouse/cluster_01/tables/analytics_internal/operation_logs_minutely_agg_local/{shard}', '{replica}')
-PARTITION BY tuple() -- TODO: not partitioned and not distributed yet. Sizes must be low.
+PARTITION BY xxHash32(project_id) % 5000 -- Users will be assigned to partitions. So only a shard will contain information about a project.
 ORDER BY (project_id, time_bucket, parameterized_query_hash, operation_type, operation_name)
 SETTINGS allow_nullable_key = 1;
 
+-- The materialized view looks for inserts in the analytics_internal.operation_logs_local table.
+-- An performs the SELECT that will populate analytics_internal.operation_logs_minutely_agg_local
 CREATE MATERIALIZED VIEW analytics_internal.operations_logs_minutely_mv ON CLUSTER 'cluster_01'
-TO analytics_internal.operation_logs_minutely_agg
+        TO analytics_internal.operation_logs_minutely_agg_local
 AS SELECT
-    project_id,
-    toStartOfMinute(timestamp) as time_bucket,
-    role,
-    parameterized_query_hash,
-    operation_type,
-    operation_name,
-    avgState(request_size) as request_size_avg,
-    avgState(response_size) as response_size_avg,
-    maxSimpleState(response_size) as response_size_max,
-    quantilesState(0.5, 0.9, 0.95, 0.99)(response_size) as response_size_quantiles,
-    avgState(latency) as latency_avg,
-    maxSimpleState(latency) as latency_max,
-    quantilesState(0.5, 0.9, 0.95, 0.99)(latency) as latency_quantiles,
-    sumSimpleStateIf(1, isNotNull(error)) as err_count,
-    sumSimpleState(1) as count
-FROM analytics_internal.operation_logs_local
-GROUP BY (project_id, time_bucket, role, parameterized_query_hash, operation_type, operation_name);
+       project_id,
+       toStartOfMinute(timestamp) as time_bucket,
+       role,
+       parameterized_query_hash,
+       operation_type,
+       operation_name,
+       avgState(request_size) as request_size_avg,
+       avgState(response_size) as response_size_avg,
+       maxSimpleState(response_size) as response_size_max,
+       quantilesState(0.5, 0.9, 0.95, 0.99)(response_size) as response_size_quantiles,
+       avgState(latency) as latency_avg,
+       maxSimpleState(latency) as latency_max,
+       quantilesState(0.5, 0.9, 0.95, 0.99)(latency) as latency_quantiles,
+       sumSimpleStateIf(1, isNotNull(error)) as err_count,
+       sumSimpleState(1) as count
+   FROM analytics_internal.operation_logs_local
+   GROUP BY (project_id, time_bucket, role, parameterized_query_hash, operation_type, operation_name);
 
+-- We create a view to project the data on analytics_internal.operation_logs_minutely_agg_local
+-- In a meaningful way, (the intermediate states for the values contain garbage)
+CREATE VIEW IF NOT EXISTS analytics_internal.operation_logs_minutely_local ON CLUSTER 'cluster_01'
+AS SELECT
+       project_id,
+       time_bucket,
+       role,
+       operation_type,
+       parameterized_query_hash,
+       operation_name,
+       avgMerge(request_size_avg) as request_size_avg,
+       avgMerge(response_size_avg) as response_size_avg,
+       max(response_size_max) as reponse_size_max,
+       quantilesMerge(0.5, 0.9, 0.95, 0.99)(response_size_quantiles) as response_size_quantiles,
+       avgMerge(latency_avg) as latency_avg,
+       max(latency_max) as latency_max,
+       quantilesMerge(0.5, 0.9, 0.95, 0.99)(latency_quantiles) as latency_quantiles,
+       sum(err_count) as err_count,
+       sum(count) as count
+   FROM analytics_internal.operation_logs_minutely_agg_local
+   GROUP BY (project_id, time_bucket, role, operation_type, parameterized_query_hash, operation_name);
+
+-- We also create a distributed table that will pull data from all the analytics_internal.operation_logs_minutely_agg_local
+CREATE TABLE IF NOT EXISTS analytics.operation_logs_minutely_agg ON CLUSTER 'cluster_01'
+    AS analytics_internal.operation_logs_minutely_agg_local
+ENGINE = Distributed('cluster_01', 'analytics_internal', 'operation_logs_minutely_agg_local', rand());
+
+-- And expose a view on top of it.
 CREATE VIEW IF NOT EXISTS analytics.operation_logs_minutely ON CLUSTER 'cluster_01'
 AS SELECT
    project_id,
@@ -162,5 +192,5 @@ AS SELECT
    quantilesMerge(0.5, 0.9, 0.95, 0.99)(latency_quantiles) as latency_quantiles,
    sum(err_count) as err_count,
    sum(count) as count
-FROM analytics_internal.operation_logs_minutely_agg
+FROM analytics.operation_logs_minutely_agg
 GROUP BY (project_id, time_bucket, role, operation_type, parameterized_query_hash, operation_name);
