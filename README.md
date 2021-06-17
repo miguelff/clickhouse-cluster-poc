@@ -42,8 +42,16 @@ Options:
 	--rps: number of requests with the same timestamp, defaults to 1000
 ```
 
-By default 20,000 rows will be inserted by 10 different projects, using a random sample of 100 queries, spanning 20 seconds.
+By default, 20,000 rows will be inserted by 10 different projects, using a random sample of 100 queries, spanning 20 seconds.
 
+## PoC schema
+
+![Diagram](poc.png)
+
+This is subject to vary, but in essence, postgres serves as a front-end for a clickhouse cluster of 2 shards, two replicas each
+in which there are two schemas `analytics`, and `analytics_internal`. `analytics` contains tables and views accessed directly by
+the clients connected through the postgres front-end, and `analytics_internal` definitions of materialized views with intermediate
+representations of the data.
 
 ## Container bootstrap process
 
