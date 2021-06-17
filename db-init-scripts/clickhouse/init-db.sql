@@ -111,13 +111,13 @@ CREATE TABLE IF NOT EXISTS analytics_internal.operation_logs_minutely_agg ON CLU
    parameterized_query_hash FixedString(40),
    request_size_avg AggregateFunction(avg, Nullable(UInt32)),
    response_size_avg AggregateFunction(avg, Nullable(UInt32)),
-   response_size_max AggregateFunction(max, Nullable(UInt32)),
+   response_size_max SimpleAggregateFunction(max, Nullable(UInt32)),
    response_size_quantiles AggregateFunction(quantiles(0.5, 0.9, 0.95, 0.99), Nullable(UInt32)),
    latency_avg AggregateFunction(avg, UInt32),
-   latency_max AggregateFunction(max, UInt32),
+   latency_max SimpleAggregateFunction(max, UInt32),
    latency_quantiles AggregateFunction(quantiles(0.5, 0.9, 0.95, 0.99), UInt32),
-   err_count AggregateFunction(count),
-   count AggregateFunction(count)
+   err_count SimpleAggregateFunction(sum, UInt64),
+   count SimpleAggregateFunction(sum, UInt64)
    -- INDEX operation_type_idx operation_type TYPE bloom_filter() GRANULARITY  1
 ) ENGINE = ReplicatedAggregatingMergeTree('/clickhouse/cluster_01/tables/analytics_internal/operation_logs_minutely_agg_local/{shard}', '{replica}')
 PARTITION BY tuple() -- TODO: not partitioned and not distributed yet. Sizes must be low.
@@ -135,13 +135,13 @@ AS SELECT
     operation_name,
     avgState(request_size) as request_size_avg,
     avgState(response_size) as response_size_avg,
-    maxState(response_size) as response_size_max,
+    maxSimpleState(response_size) as response_size_max,
     quantilesState(0.5, 0.9, 0.95, 0.99)(response_size) as response_size_quantiles,
     avgState(latency) as latency_avg,
-    maxState(latency) as latency_max,
+    maxSimpleState(latency) as latency_max,
     quantilesState(0.5, 0.9, 0.95, 0.99)(latency) as latency_quantiles,
-    countStateIf(isNotNull(error)) as err_count,
-    countState() as count
+    sumSimpleStateIf(1, isNotNull(error)) as err_count,
+    sumSimpleState(1) as count
 FROM analytics_internal.operation_logs_local
 GROUP BY (project_id, time_bucket, role, parameterized_query_hash, operation_type, operation_name);
 
@@ -155,12 +155,12 @@ AS SELECT
    operation_name,
    avgMerge(request_size_avg) as request_size_avg,
    avgMerge(response_size_avg) as response_size_avg,
-   maxMerge(response_size_max) as reponse_size_max,
+   max(response_size_max) as reponse_size_max,
    quantilesMerge(0.5, 0.9, 0.95, 0.99)(response_size_quantiles) as response_size_quantiles,
    avgMerge(latency_avg) as latency_avg,
-   maxMerge(latency_max) as latency_max,
+   max(latency_max) as latency_max,
    quantilesMerge(0.5, 0.9, 0.95, 0.99)(latency_quantiles) as latency_quantiles,
-   countMerge(err_count) as err_count,
-   countMerge(count) as count
+   sum(err_count) as err_count,
+   sum(count) as count
 FROM analytics_internal.operation_logs_minutely_agg
 GROUP BY (project_id, time_bucket, role, operation_type, parameterized_query_hash, operation_name);
