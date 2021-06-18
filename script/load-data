@@ -1,0 +1,27 @@
+#!/usr/bin/env ruby
+require 'fileutils'
+require 'open3'
+
+if $0 == __FILE__
+  args = Hash[ARGV.join(' ').scan(/--?([^=\s]+)(?:=(\S+))?/) ]
+  file_or_dir = args['input']
+  file_or_dir ||= "/tmp/output/*.csv"
+    
+  files = Dir[file_or_dir]
+  unless files.any?
+    puts "No files matching pattern"
+  end
+                      
+  files.each do |file|
+    table = File.basename(file).split("-").first
+    cmd = "cat #{file} | docker exec -i clickhouse-s0-r0 clickhouse-client --input_format_allow_errors_ratio=0.1 --query=\"INSERT INTO analytics.#{table} FORMAT CSV\""
+
+    time = Time.now
+    puts "Loading: #{file}"
+    Open3.popen3(cmd) do |i,o,e,t|
+      puts o.read
+      STDERR.puts e.read
+    end    
+    puts "Done in #{Time.now-time} seconds"
+  end
+end

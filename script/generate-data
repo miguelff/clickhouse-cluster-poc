@@ -2,36 +2,57 @@
 require 'csv'
 require 'securerandom'
 require 'open3'
+require 'fileutils'
 
 class Generator
-  attr_reader :projects, :start, :rows, :batch_size, :debug, :container
+  attr_reader :projects, :start, :rows, :batch_size, :rps, :debug
+  
+  def to_s
+    "#{self.class.name}: projects=#{projects.size}, start='#{start}', rows=#{rows}, batch_size=#{batch_size}, rps=#{rps}"
+  end
 
   def initialize(args={})
     @start = args[:start] || Time.now
     @rows = args[:rows]
     @batch_size = args[:batch_size]
+    @rps = args[:rps]
     @debug = args[:debug]
-    @container = args[:container]
+
+    output_dir = args[:output_dir]
+    unless File.directory?(output_dir)
+      FileUtils.mkdir_p(output_dir)
+    end
+
+    # caches
+    @random_uuids = []
+    @random_uuid_sample_set = false
+    @random_strings = {}
+    @random_string_sample_set = {}
 
     num_projects = args[:num_projects] || 1
     @projects = [].tap do |p|
       num_projects.times do
-        p << random_uuid
+        p << SecureRandom.uuid
+      end
+    end
+
+    @file_name_prefix = File.join(output_dir, "#{table}-rows#{rows}-bsize#{batch_size}_proj#{num_projects}_rps#{rps}")
+  end
+
+  def generate(args={})
+    1.step(rows, batch_size) do |start_row|
+      f = "#{@file_name_prefix}_s#{start_row}.csv"
+      if debug
+        puts "Generating #{f}"
+      end
+      CSV.open(f, 'wb') do |csv|
+        (start_row...[start_row+batch_size, rows].min).each do |row|
+          csv << generate_row(args.merge("row" => row))
+        end
       end
     end
   end
 
-  def generate(args={})
-    csv = []
-    rows.times do |r|
-      csv << generate_row(args.merge("row" => r))
-      if (r+1) % batch_size == 0
-        flush(csv)
-      end
-    end
-    flush(csv) if csv.length > 0
-  end
-  
   def flush(csv)
     cmd = "docker exec -i #{container} clickhouse-client --query=\"INSERT INTO analytics.#{table} FORMAT CSV\""
     if debug
@@ -44,10 +65,10 @@ class Generator
       puts o.read
       STDERR.puts e.read
     end
-    
+
     csv.clear
   end
-    
+
 
   def timestamp(start, offset)
     (start + offset).strftime("%Y-%m-%d %H:%M:%S")
@@ -58,11 +79,33 @@ class Generator
   end
 
   def random_string(length=8)
+    if @random_string_sample_set[length]
+      @random_strings[length].sample
+    else
+      str = random_string_uncached(length)
+      @random_strings[length] ||= []
+      @random_strings[length] <<
+      if @random_strings[length] == 100
+         @random_string_sample_set[length] = true
+      end
+      str
+    end
+  end
+
+  def random_string_uncached(length=8)
     (0...length).map { (65 + rand(26)).chr }.join
   end
 
   def random_uuid
-    SecureRandom.uuid
+    if @random_uuid_sample_set
+      @random_uuids.sample
+    else
+      uuid = SecureRandom.uuid
+      @random_uuids << uuid
+      if @random_uuids.size == 100
+        @random_uuid_sample_set = true
+      end
+    end
   end
 
   def self.nil_methods(*args)
@@ -75,23 +118,27 @@ end
 class OperationLogsGenerator < Generator
 
   attr_reader :queries
+  
+  def to_s
+    "#{super}, queries=#{queries.size}"
+  end
 
   def initialize(args={})
     super
     num_queries = args[:num_queries] || 1
     @queries = [].tap do |p|
       num_queries.times do
-          p << {hash: random_string, operation_type: nullable{ random_string }, operation_name: %w(query mutation).sample, operation_id: nullable{ random_string }, query: nullable(0.1) { random_string(50)} }
+          p << {hash: random_string_uncached, operation_type: nullable{ random_string_uncached }, operation_name: %w(query mutation).sample, operation_id: nullable{ random_string }, query: nullable { random_string(50)} }
       end
     end
   end
-  
+
   def table
     "operation_logs"
   end
 
   def generate_row(args)
-    offset = (args["row"] || 0) / (args["rps"]&.to_i || 10)
+    offset = (args["row"] || 0) / (rps|| 10)
     start = Time.now
     query = queries.sample
     [
@@ -131,11 +178,11 @@ class OperationLogsGenerator < Generator
   alias_method :request_read_time, :latency
 
   def request_size
-    nullable(0.1) { rand(1..1000) }
+    nullable { rand(1..1000) }
   end
 
   def response_size
-    nullable(0.1) { rand(1..1000) }
+    nullable { rand(1..1000) }
   end
 
   def session_vars
@@ -182,24 +229,27 @@ if $0 == __FILE__
   args["queries"] ||= 100
   args["rows"] ||= 200_000
   args["batch-size"] ||= 100_000
-  args["container"] ||= "clickhouse-s1-r1"
+  args["output-dir"] ||= "/tmp/output"
   args["csv-only"] ||= false
   args["rps"] ||= 1000
-
-  puts "DEBUG: Generating csv: #{args.inspect}"
 
   generator = case args["table"]
               when "operation_logs"
                 OperationLogsGenerator
               end
 
-  g = generator.new(num_projects: args.delete("projects").to_i, 
+  g = generator.new(num_projects: args.delete("projects").to_i,
                     num_queries: args.delete("queries").to_i,
-                    rows: args.delete("rows").to_i, 
+                    rows: args.delete("rows").to_i,
                     batch_size: args.delete("batch-size").to_i,
                     debug: !!args.delete("debug"),
-                    container: args.delete("container"))
-                
+                    rps: args.delete("rps").to_i,
+                    output_dir: args.delete("output-dir"))
+                    
+  if g.debug
+    puts g
+  end
+
   g.generate(args)
 end
 
