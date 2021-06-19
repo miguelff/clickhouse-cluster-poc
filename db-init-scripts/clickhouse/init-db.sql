@@ -112,10 +112,12 @@ CREATE TABLE IF NOT EXISTS analytics_internal.operation_logs_1m_agg_local ON CLU
    request_size_avg AggregateFunction(avg, Nullable(UInt32)),
    response_size_avg AggregateFunction(avg, Nullable(UInt32)),
    response_size_max SimpleAggregateFunction(max, Nullable(UInt32)),
-   response_size_quantiles AggregateFunction(quantiles(0.5, 0.9, 0.95, 0.99), Nullable(UInt32)),
+   response_size_p90 AggregateFunction(quantile(0.9), Nullable(UInt32)),
+   response_size_p99 AggregateFunction(quantile(0.99), Nullable(UInt32)),
    latency_avg AggregateFunction(avg, UInt32),
    latency_max SimpleAggregateFunction(max, UInt32),
-   latency_quantiles AggregateFunction(quantiles(0.5, 0.9, 0.95, 0.99), UInt32),
+   latency_p90 AggregateFunction(quantile(0.9), UInt32),
+   latency_p99 AggregateFunction(quantile(0.99), UInt32),
    err_count SimpleAggregateFunction(sum, UInt64),
    count SimpleAggregateFunction(sum, UInt64)
    -- INDEX operation_type_idx operation_type TYPE bloom_filter() GRANULARITY  1
@@ -138,36 +140,16 @@ AS SELECT
        avgState(request_size) as request_size_avg,
        avgState(response_size) as response_size_avg,
        maxSimpleState(response_size) as response_size_max,
-       quantilesState(0.5, 0.9, 0.95, 0.99)(response_size) as response_size_quantiles,
+       quantileState(0.9)(response_size) as response_size_p90,
+       quantileState(0.99)(response_size) as response_size_p99,
        avgState(latency) as latency_avg,
        maxSimpleState(latency) as latency_max,
-       quantilesState(0.5, 0.9, 0.95, 0.99)(latency) as latency_quantiles,
+       quantileState(0.9)(latency) as latency_p90,
+       quantileState(0.99)(latency) as latency_p99,
        sumSimpleStateIf(1, isNotNull(error)) as err_count,
        sumSimpleState(1) as count
    FROM analytics_internal.operation_logs_local
    GROUP BY (project_id, time_bucket, role, parameterized_query_hash, operation_type, operation_name);
-
--- We create a view to project the data on analytics_internal.operation_logs_1m_agg_local
--- In a meaningful way, (the intermediate states for the values contain garbage)
-CREATE VIEW IF NOT EXISTS analytics_internal.operation_logs_1m_local ON CLUSTER 'cluster_01'
-AS SELECT
-       project_id,
-       time_bucket,
-       role,
-       operation_type,
-       parameterized_query_hash,
-       operation_name,
-       avgMerge(request_size_avg) as request_size_avg,
-       avgMerge(response_size_avg) as response_size_avg,
-       max(response_size_max) as reponse_size_max,
-       quantilesMerge(0.5, 0.9, 0.95, 0.99)(response_size_quantiles) as response_size_quantiles,
-       avgMerge(latency_avg) as latency_avg,
-       max(latency_max) as latency_max,
-       quantilesMerge(0.5, 0.9, 0.95, 0.99)(latency_quantiles) as latency_quantiles,
-       sum(err_count) as err_count,
-       sum(count) as count
-   FROM analytics_internal.operation_logs_1m_agg_local
-   GROUP BY (project_id, time_bucket, role, operation_type, parameterized_query_hash, operation_name);
 
 -- We also create a distributed table that will pull data from all the analytics_internal.operation_logs_1m_agg_local
 CREATE TABLE IF NOT EXISTS analytics.operation_logs_1m_agg ON CLUSTER 'cluster_01'
@@ -177,8 +159,6 @@ ENGINE = Distributed('cluster_01', 'analytics_internal', 'operation_logs_1m_agg_
 -- And expose a view on top of it.
 CREATE VIEW IF NOT EXISTS analytics.operation_logs_1m ON CLUSTER 'cluster_01'
 AS
-WITH quantilesMerge(0.5, 0.9, 0.95, 0.99)(response_size_quantiles) AS rsq,
-quantilesMerge(0.5, 0.9, 0.95, 0.99)(latency_quantiles) as lq
 SELECT
    project_id,
    time_bucket,
@@ -189,16 +169,12 @@ SELECT
    avgMerge(request_size_avg) as request_size_avg,
    avgMerge(response_size_avg) as response_size_avg,
    max(response_size_max) as reponse_size_max,
-   rsq[1] as response_size_median,
-   rsq[2] as response_size_p90,
-   rsq[3] as response_size_p95,
-   rsq[4] as response_size_p99,
+   quantileMerge(0.9)(response_size_p90) as response_size_p90,
+   quantileMerge(0.99)(response_size_p99) as response_size_p99,
    avgMerge(latency_avg) as latency_avg,
    max(latency_max) as latency_max,
-   lq[1] as latency_median,
-   lq[2] as latency_p90,
-   lq[3] as latency_p95,
-   lq[4] as latency_p99,
+   quantileMerge(0.9)(latency_p90) as latency_p90,
+   quantileMerge(0.99)(latency_p99) as latency_p99,
    sum(err_count) as err_count,
    sum(count) as count
 FROM analytics.operation_logs_1m_agg
