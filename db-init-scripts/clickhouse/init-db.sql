@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS analytics_internal.operation_logs_local ON CLUSTER 'c
     generated_sql Nullable(String) -- LEGACY
 ) ENGINE = ReplicatedMergeTree('/clickhouse/cluster_01/tables/analytics_internal/operation_logs_local/{shard}', '{replica}')
 ORDER BY (project_id, timestamp)
-PARTITION BY project_id -- Users will be assigned to partitions. So only a shard will contain information about a project.
+PARTITION BY xxHash32(project_id) % 5000-- Users will be assigned to partitions. So only a shard will contain information about a project.
 TTL timestamp + INTERVAL 1 MONTH DELETE;
 
 CREATE TABLE IF NOT EXISTS analytics.operation_logs ON CLUSTER 'cluster_01'
@@ -116,15 +116,14 @@ CREATE TABLE IF NOT EXISTS analytics_internal.operation_logs_5m_agg_local ON CLU
     latency_p99 AggregateFunction(quantile(0.99), UInt32),
     err_count SimpleAggregateFunction(sum, UInt64),
     count SimpleAggregateFunction(sum, UInt64)
-    -- INDEX operation_type_idx operation_type TYPE bloom_filter() GRANULARITY  1
 ) ENGINE = ReplicatedAggregatingMergeTree('/clickhouse/cluster_01/tables/analytics_internal/operation_logs_5m_agg_local/{shard}', '{replica}')
-PARTITION BY project_id
 ORDER BY (project_id, time_bucket)
-SETTINGS allow_nullable_key = 1;
+PARTITION BY xxHash32(project_id) % 5000
+TTL time_bucket + INTERVAL 1 DAY DELETE;
 
 -- The materialized view looks for inserts in the analytics_internal.operation_logs_local table.
 -- An performs the SELECT that will populate analytics_internal.operation_logs_5m_agg_local
-CREATE MATERIALIZED VIEW analytics_internal.operations_logs_5m_mv ON CLUSTER 'cluster_01'
+CREATE MATERIALIZED VIEW analytics_internal.operations_logs_5m_agg_mv ON CLUSTER 'cluster_01'
 TO analytics_internal.operation_logs_5m_agg_local
 AS SELECT
    project_id,
@@ -165,9 +164,9 @@ CREATE TABLE IF NOT EXISTS analytics_internal.operation_logs_1h_agg_local ON CLU
     err_count SimpleAggregateFunction(sum, UInt64),
     count SimpleAggregateFunction(sum, UInt64)
 ) ENGINE = ReplicatedAggregatingMergeTree('/clickhouse/cluster_01/tables/analytics_internal/operation_logs_1h_agg_local/{shard}', '{replica}')
-PARTITION BY project_id
 ORDER BY (project_id, time_bucket)
-SETTINGS allow_nullable_key = 1;
+PARTITION BY xxHash32(project_id) % 5000
+TTL time_bucket + INTERVAL 1 MONTH DELETE;
 
 -- The materialized view looks for inserts in the analytics_internal.operation_logs_local table.
 -- An performs the SELECT that will populate analytics_internal.operation_logs_1h_agg_local
@@ -194,3 +193,75 @@ GROUP BY (project_id, time_bucket);
 CREATE TABLE IF NOT EXISTS analytics.operation_logs_1h_agg ON CLUSTER 'cluster_01'
 AS analytics_internal.operation_logs_1h_agg_local
 ENGINE = Distributed('cluster_01', 'analytics_internal', 'operation_logs_1h_agg_local', rand());
+
+-- This table will provide the storage for the per operation groupings
+CREATE TABLE IF NOT EXISTS analytics_internal.operation_logs_5m_agg_per_op_local ON CLUSTER 'cluster_01' (
+    project_id UUID,
+    time_bucket DateTime,
+    operation_name String,
+    latency_avg AggregateFunction(avg, UInt32),
+    latency_p90 AggregateFunction(quantile(0.9), UInt32),
+    latency_p99 AggregateFunction(quantile(0.99), UInt32),
+    err_count SimpleAggregateFunction(sum, UInt64),
+    count SimpleAggregateFunction(sum, UInt64)
+) ENGINE = ReplicatedAggregatingMergeTree('/clickhouse/cluster_01/tables/analytics_internal/operation_logs_5m_agg_per_op_local/{shard}', '{replica}')
+ORDER BY (project_id, time_bucket, operation_name)
+PARTITION BY xxHash32(project_id) % 5000
+TTL time_bucket + INTERVAL 1 DAY DELETE;
+
+-- The materialized view looks for inserts in the analytics_internal.operation_logs_local table.
+-- An performs the SELECT that will populate analytics_internal.operation_logs_5m_agg_per_op_local
+CREATE MATERIALIZED VIEW analytics_internal.operations_logs_5m_agg_per_op_mv ON CLUSTER 'cluster_01'
+TO analytics_internal.operation_logs_5m_agg_per_op_local
+AS SELECT
+    project_id,
+    toStartOfFiveMinute(timestamp) as time_bucket,
+    coalesce(operation_name, toString(parameterized_query_hash)) as operation_name,
+    avgState(latency) as latency_avg,
+    quantileState(0.9)(latency) as latency_p90,
+    quantileState(0.99)(latency) as latency_p99,
+    sumSimpleStateIf(1, isNotNull(error)) as err_count,
+    sumSimpleState(1) as count
+    FROM analytics_internal.operation_logs_local
+GROUP BY (project_id, time_bucket, operation_name);
+
+-- We also create a distributed table that will pull data from all the analytics_internal.operation_logs_5m_agg_per_op_local
+CREATE TABLE IF NOT EXISTS analytics.operation_logs_5m_agg_per_op ON CLUSTER 'cluster_01'
+AS analytics_internal.operation_logs_5m_agg_per_op_local
+ENGINE = Distributed('cluster_01', 'analytics_internal', 'operation_logs_5m_agg_per_op_local', rand());
+
+-- This table will provide the storage for the per operation groupings
+CREATE TABLE IF NOT EXISTS analytics_internal.operation_logs_1h_agg_per_op_local ON CLUSTER 'cluster_01' (
+    project_id UUID,
+    time_bucket DateTime,
+    operation_name String,
+    latency_avg AggregateFunction(avg, UInt32),
+    latency_p90 AggregateFunction(quantile(0.9), UInt32),
+    latency_p99 AggregateFunction(quantile(0.99), UInt32),
+    err_count SimpleAggregateFunction(sum, UInt64),
+    count SimpleAggregateFunction(sum, UInt64)
+) ENGINE = ReplicatedAggregatingMergeTree('/clickhouse/cluster_01/tables/analytics_internal/operation_logs_1h_agg_per_op_local/{shard}', '{replica}')
+      ORDER BY (project_id, time_bucket, operation_name)
+      PARTITION BY xxHash32(project_id) % 5000
+      TTL time_bucket + INTERVAL 1 MONTH DELETE;
+
+-- The materialized view looks for inserts in the analytics_internal.operation_logs_local table.
+-- An performs the SELECT that will populate analytics_internal.operation_logs_1h_agg_per_op_local
+CREATE MATERIALIZED VIEW analytics_internal.operations_logs_1h_agg_per_op_mv ON CLUSTER 'cluster_01'
+TO analytics_internal.operation_logs_1h_agg_per_op_local
+AS SELECT
+   project_id,
+   toStartOfHour(timestamp) as time_bucket,
+   coalesce(operation_name, toString(parameterized_query_hash)) as operation_name,
+   avgState(latency) as latency_avg,
+   quantileState(0.9)(latency) as latency_p90,
+   quantileState(0.99)(latency) as latency_p99,
+   sumSimpleStateIf(1, isNotNull(error)) as err_count,
+   sumSimpleState(1) as count
+FROM analytics_internal.operation_logs_local
+GROUP BY (project_id, time_bucket, operation_name);
+
+-- We also create a distributed table that will pull data from all the analytics_internal.operation_logs_1h_agg_per_op_local
+CREATE TABLE IF NOT EXISTS analytics.operation_logs_1h_agg_per_op ON CLUSTER 'cluster_01'
+AS analytics_internal.operation_logs_1h_agg_per_op_local
+ENGINE = Distributed('cluster_01', 'analytics_internal', 'operation_logs_1h_agg_per_op_local', rand());
