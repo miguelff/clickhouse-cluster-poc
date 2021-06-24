@@ -128,7 +128,7 @@ class OperationLogsGenerator < Generator
     num_queries = args[:num_queries] || 1
     @queries = [].tap do |p|
       num_queries.times do
-          p << {hash: random_string_uncached, operation_type: nullable{ random_string_uncached }, operation_name: %w(query mutation).sample, operation_id: nullable{ random_string }, query: nullable { random_string(50)} }
+          p << {hash: random_string_uncached, operation_name: nullable{ random_string_uncached }, operation_type: %w(query mutation).sample, operation_id: nullable{ random_string }, query: nullable { random_string(50)} }
       end
     end
   end
