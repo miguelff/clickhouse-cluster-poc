@@ -3,10 +3,11 @@ require 'csv'
 require 'securerandom'
 require 'open3'
 require 'fileutils'
+require 'date'
 
 class Generator
   attr_reader :projects, :start, :rows, :batch_size, :rps, :debug
-  
+
   def to_s
     "#{self.class.name}: projects=#{projects.size}, start='#{start}', rows=#{rows}, batch_size=#{batch_size}, rps=#{rps}"
   end
@@ -24,8 +25,6 @@ class Generator
     end
 
     # caches
-    @random_uuids = []
-    @random_uuid_sample_set = false
     @random_strings = {}
     @random_string_sample_set = {}
 
@@ -45,7 +44,7 @@ class Generator
       if debug
         puts "Generating #{f}"
       end
-      CSV.open(f, 'wb') do |csv|
+      CSV.open(f, 'wb', write_headers: true, headers: headers) do |csv|
         (start_row...[start_row+batch_size, rows].min).each do |row|
           csv << generate_row(args.merge("row" => row))
         end
@@ -71,11 +70,20 @@ class Generator
 
 
   def timestamp(start, offset)
-    (start + offset).strftime("%Y-%m-%d %H:%M:%S")
+
+    (start.to_time + offset).strftime("%Y-%m-%d %H:%M:%S")
   end
 
   def nullable(prob=0.1)
     return yield if rand > prob
+  end
+
+  def more_likely(prob, more_likely)
+    if rand < prob
+      more_likely
+    else
+      yield
+    end
   end
 
   def random_string(length=8)
@@ -97,15 +105,7 @@ class Generator
   end
 
   def random_uuid
-    if @random_uuid_sample_set
-      @random_uuids.sample
-    else
-      uuid = SecureRandom.uuid
-      @random_uuids << uuid
-      if @random_uuids.size == 100
-        @random_uuid_sample_set = true
-      end
-    end
+    SecureRandom.uuid
   end
 
   def self.nil_methods(*args)
@@ -118,7 +118,7 @@ end
 class OperationLogsGenerator < Generator
 
   attr_reader :queries
-  
+
   def to_s
     "#{super}, queries=#{queries.size}"
   end
@@ -137,52 +137,84 @@ class OperationLogsGenerator < Generator
     "operation_logs"
   end
 
+  def headers
+    %w(project_id timestamp transport group_id instance_uid client_name operation_type operation_name operation_id role request_size response_size latency request_read_time error error_code kind request_mode query parameterized_query_hash session_vars http_info websocket_id)
+  end
+
   def generate_row(args)
     offset = (args["row"] || 0) / (rps|| 10)
-    start = Time.now
+    start = self.start
     query = queries.sample
+
+    project_id = projects.sample
+    timestamp = self.timestamp(start, offset)
+    transport = self.transport
+    websocket_id = self.websocket_id if transport == 'ws'
+    group_id = self.group_id
+    instance_uid = self.instance_uid
+    client_name = self.client_name
+    operation_type = query[:operation_type]
+    operation_name  =  query[:operation_name]
+    operation_id = query[:operation_id]
+    role = self.role
+    request_size = self.request_size
+    response_size = self.response_size
+    latency = self.latency
+    request_read_time = self.request_read_time
+
+    if request_read_time  < latency
+      tmp = latency
+      latency = request_read_time
+      request_read_time = tmp
+    end
+
+    error = self.error
+    error_code = self.error_code if error
+    kind = nil
+    request_mode = self.request_mode if transport == 'http'
+    query = nil
+    parameterized_query_hash = self.parameterized_query_hash
+    session_vars = self.session_vars
+    http_info = nil
+
     [
-        projects.sample,
-        timestamp(start, offset),
-        request_id,
-        server_client_id,
+        project_id,
+        timestamp,
+        transport,
+        group_id,
         instance_uid,
         client_name,
-        query[:operation_type],
-        query[:operation_name],
-        query[:operation_id],
-        transport,
+        operation_type,
+        operation_name,
+        operation_id,
         role,
-        query[:query],
-        query[:hash],
-        session_vars,
         request_size,
         response_size,
         latency,
         request_read_time,
         error,
         error_code,
+        kind,
+        request_mode,
+        query,
+        parameterized_query_hash,
+        session_vars,
         http_info,
-        websocket_id,
-        ws_operation_id,
-        opkind,
-        generated_sql,
+        websocket_id
     ]
   end
 
-  nil_methods(:error_code, :http_info, :websocket_id, :ws_operation_id, :opkind, :generated_sql)
-
   def latency
-    rand(1000...1_000_000)
+    rand(1000...10_000)
   end
   alias_method :request_read_time, :latency
 
   def request_size
-    nullable { rand(1..1000) }
+    rand(1..1000)
   end
 
   def response_size
-    nullable { rand(1..1000) }
+    rand(1..1000)
   end
 
   def session_vars
@@ -191,6 +223,10 @@ class OperationLogsGenerator < Generator
 
   def error
     nullable(0.9) { random_string }
+  end
+
+  def error_code
+    rand(400...405)
   end
 
   def client_name
@@ -209,6 +245,10 @@ class OperationLogsGenerator < Generator
     %w(http ws).sample
   end
 
+  def request_mode
+    more_likely(0.8, 'single') { 'batch' }
+  end
+
   def role
     %w(user admin worker).sample
   end
@@ -220,18 +260,27 @@ class OperationLogsGenerator < Generator
   def instance_uid
     random_uuid
   end
+
+  def websocket_id
+    random_uuid
+  end
+
+  def group_id
+    random_uuid
+  end
 end
 
 if $0 == __FILE__
   args = Hash[ARGV.join(' ').scan(/--?([^=\s]+)(?:=(\S+))?/) ]
   args["table"] ||= "operation_logs"
-  args["projects"] ||= 10
+  args["projects"] ||= 2
   args["queries"] ||= 100
-  args["rows"] ||= 200_000
-  args["batch-size"] ||= 100_000
+  args["rows"] ||= 1000
+  args["batch-size"] ||= args["rows"]
   args["output-dir"] ||= "/tmp/output"
   args["csv-only"] ||= false
-  args["rps"] ||= 1000
+  args["rps"] ||= 2
+  args["start"] ||= "2040-01-01 09:51:49"
 
   generator = case args["table"]
               when "operation_logs"
@@ -240,12 +289,13 @@ if $0 == __FILE__
 
   g = generator.new(num_projects: args.delete("projects").to_i,
                     num_queries: args.delete("queries").to_i,
+                    start: DateTime.parse(args["start"]),
                     rows: args.delete("rows").to_i,
                     batch_size: args.delete("batch-size").to_i,
                     debug: !!args.delete("debug"),
                     rps: args.delete("rps").to_i,
                     output_dir: args.delete("output-dir"))
-                    
+
   if g.debug
     puts g
   end
